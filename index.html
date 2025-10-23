@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fireworks Generator</title>
+    <!-- Load Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Use Inter font */
+        html {
+            font-family: 'Inter', sans-serif;
+        }
+        
+        /* Ensure canvas is behind text and fills screen */
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+        }
+        
+        #fireworksCanvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 0;
+        }
+        
+        /* Style for the instruction text */
+        #instructions {
+            position: absolute;
+            top: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1;
+            transition: opacity 0.5s ease-out;
+            opacity: 1;
+        }
+
+        /* Narration and control button styles */
+        #controls {
+            position: absolute;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        #narrateButton {
+            padding: 0.75rem 1.25rem;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: white;
+            background-color: #4F46E5; /* Indigo-600 */
+            border: none;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            transition: all 0.2s ease-in-out;
+            box-shadow: 0 4px 14px 0 rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(79, 70, 229, 0.5);
+        }
+
+        #narrateButton:hover {
+            background-color: #6366F1; /* Indigo-500 */
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px 0 rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(99, 102, 241, 0.5);
+        }
+
+        #narrateButton:disabled {
+            background-color: #4B5563; /* Gray-600 */
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+
+        /* Loading Spinner */
+        #loadingSpinner {
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            display: none; /* Hidden by default */
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Narration Text Box */
+        #narrationBox {
+            position: absolute;
+            bottom: 7rem;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            max-width: 90%;
+            width: 500px;
+            padding: 1rem;
+            background-color: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(5px);
+            color: #E5E7EB; /* Gray-200 */
+            border-radius: 0.5rem;
+            text-align: center;
+            font-size: 0.95rem;
+            line-height: 1.5;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.4s ease-out, visibility 0.4s ease-out;
+        }
+
+        #narrationBox.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+    </style>
+</head>
+<body class="bg-black">
+
+    <!-- Canvas element for the fireworks -->
+    <canvas id="fireworksCanvas"></canvas>
+    
+    <!-- Instruction text -->
+    <div id="instructions" class="text-white/70 font-sans text-sm p-3 bg-black/40 rounded-lg shadow-lg backdrop-blur-sm">
+        Click or tap to launch a firework
+    </div>
+
+    <!-- Controls for Gemini API features -->
+    <div id="controls">
+        <button id="narrateButton">✨ Narrate Show</button>
+        <div id="loadingSpinner"></div>
+    </div>
+
+    <!-- Container for narration text -->
+    <div id="narrationBox"></div>
+
+    <script>
+        window.addEventListener('load', () => {
+            const canvas = document.getElementById('fireworksCanvas');
+            const ctx = canvas.getContext('2d');
+            const instructions = document.getElementById('instructions');
+            
+            // Gemini API Elements
+            const narrateButton = document.getElementById('narrateButton');
+            const loadingSpinner = document.getElementById('loadingSpinner');
+            const narrationBox = document.getElementById('narrationBox');
+
+            // --- Configuration ---
+            const GRAVITY = 0.07;
+            const ROCKET_FRICTION = 0.99;
+            const PARTICLE_FRICTION = 0.97;
+            const ROCKET_TRAIL_LENGTH = 5;
+            const PARTICLE_TRAIL_LENGTH = 3;
+
+            let rockets = [];
+            let particles = [];
+            let instructionsVisible = true;
+            let audioContext;
+            let narrationTimer; // Timer to hide narration box
+
+            // --- Gemini API Configuration ---
+            const API_KEY = ""; // Leave empty, will be handled by the environment
+            const TEXT_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${API_KEY}`;
+            const TTS_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${API_KEY}`;
+            const AUDIO_SAMPLE_RATE = 24000; // API returns 24kHz audio
+
+
+            // --- Helper Functions ---
+            
+            // Sets canvas dimensions to fill the window
+            function setupCanvas() {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+                try {
+                    audioContext = audioContext || new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) {
+                    console.warn("Web Audio API is not supported in this browser.");
+                    narrateButton.disabled = true;
+                    narrateButton.textContent = "Audio Not Supported";
+                }
+            }
+
+            // Generates a random number in a range
+            function random(min, max) {
+                return Math.random() * (max - min) + min;
+            }
+
+            // Hides the instruction text
+            function hideInstructions() {
+                if (instructionsVisible) {
+                    instructions.style.opacity = '0';
+                    instructionsVisible = false;
+                }
+            }
+
+            // --- Rocket Class ---
+            class Rocket {
+                constructor(x, y) {
+                    this.x = x;
+                    this.y = y;
+                    this.vx = random(-1.5, 1.5);
+                    this.vy = random(-12, -8);
+                    this.hue = random(0, 360);
+                    this.color = `hsl(${this.hue}, 100%, 75%)`;
+                    this.trail = [];
+                    this.opacity = 1;
+                }
+
+                update() {
+                    // Add current position to the start of the trail
+                    this.trail.unshift({ x: this.x, y: this.y });
+                    // Remove old trail points
+                    if (this.trail.length > ROCKET_TRAIL_LENGTH) {
+                        this.trail.pop();
+                    }
+
+                    // Apply physics
+                    this.x += this.vx;
+                    this.y += this.vy;
+                    this.vx *= ROCKET_FRICTION;
+                    this.vy += GRAVITY;
+                }
+
+                draw() {
+                    ctx.save();
+                    
+                    // Draw the rocket's head
+                    ctx.fillStyle = this.color;
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, 2, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Draw the rocket's trail
+                    if (this.trail.length > 0) {
+                        ctx.beginPath();
+                        ctx.moveTo(this.x, this.y);
+                        ctx.lineTo(this.trail[0].x, this.trail[0].y);
+                        ctx.strokeStyle = this.color;
+                        ctx.lineWidth = 2;
+                        ctx.stroke();
+                    }
+                    
+                    ctx.restore();
+                }
+                
+                // Check if the rocket has reached its apex
+                shouldExplode() {
+                    return this.vy >= -1; // Explode just as it starts to fall
+                }
+            }
+
+            // --- Particle Class (for explosions) ---
+            class Particle {
+                constructor(x, y, hue) {
+                    this.x = x;
+                    this.y = y;
+                    this.hue = hue + random(-20, 20); // Vary color slightly
+                    this.brightness = random(50, 75);
+                    this.opacity = 1;
+                    this.decay = random(0.01, 0.025);
+                    this.trail = [];
+                    
+                    // Get a random angle and speed for the particle
+                    const angle = random(0, Math.PI * 2);
+                    const speed = random(1, 7);
+                    this.vx = Math.cos(angle) * speed;
+                    this.vy = Math.sin(angle) * speed;
+                }
+
+                update() {
+                    // Add to trail
+                    this.trail.unshift({ x: this.x, y: this.y });
+                    if (this.trail.length > PARTICLE_TRAIL_LENGTH) {
+                        this.trail.pop();
+                    }
+
+                    // Apply physics
+                    this.vx *= PARTICLE_FRICTION;
+                    this.vy *= PARTICLE_FRICTION;
+                    this.vy += GRAVITY;
+                    this.x += this.vx;
+                    this.y += this.vy;
+
+                    // Fade out
+                    this.opacity -= this.decay;
+                }
+
+                draw() {
+                    ctx.save();
+                    
+                    const color = `hsla(${this.hue}, 100%, ${this.brightness}%, ${this.opacity})`;
+                    
+                    // Draw the particle's head
+                    ctx.fillStyle = color;
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, 1.5, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Draw the particle's trail
+                    if (this.trail.length > 0) {
+                        ctx.beginPath();
+                        // Move to the current position
+                        ctx.moveTo(this.x, this.y);
+                        // Draw a line to the oldest trail point for a simple trail
+                        ctx.lineTo(this.trail[this.trail.length - 1].x, this.trail[this.trail.length - 1].y);
+                        ctx.strokeStyle = color;
+                        ctx.lineWidth = 1;
+                        ctx.stroke();
+                    }
+                    
+                    ctx.restore();
+                }
+                
+                // Check if particle has faded
+                isFaded() {
+                    return this.opacity <= 0.01;
+                }
+            }
+
+            // --- Control Functions ---
+
+            function launchRocket(x, y) {
+                rockets.push(new Rocket(x, y));
+            }
+
+            function createExplosion(x, y, hue) {
+                const particleCount = random(100, 200);
+                for (let i = 0; i < particleCount; i++) {
+                    particles.push(new Particle(x, y, hue));
+                }
+            }
+
+            // --- Main Animation Loop ---
+            function animate() {
+                // Request next frame
+                requestAnimationFrame(animate);
+
+                // Clear canvas with a semi-transparent black
+                // This creates the fading trail effect
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // Update and draw rockets (loop backwards for safe removal)
+                for (let i = rockets.length - 1; i >= 0; i--) {
+                    const r = rockets[i];
+                    r.update();
+                    r.draw();
+
+                    if (r.shouldExplode()) {
+                        createExplosion(r.x, r.y, r.hue);
+                        rockets.splice(i, 1); // Remove the rocket
+                    }
+                }
+
+                // Update and draw particles (loop backwards for safe removal)
+                for (let i = particles.length - 1; i >= 0; i--) {
+                    const p = particles[i];
+                    p.update();
+                    p.draw();
+
+                    if (p.isFaded()) {
+                        particles.splice(i, 1); // Remove the particle
+                    }
+                }
+            }
+
+            // --- Gemini API Functions ---
+
+            /**
+             * Shows or hides the loading spinner and disables/enables the button.
+             */
+            function showLoading(isLoading) {
+                if (isLoading) {
+                    loadingSpinner.style.display = 'block';
+                    narrateButton.disabled = true;
+                    narrateButton.style.opacity = '0.7';
+                } else {
+                    loadingSpinner.style.display = 'none';
+                    narrateButton.disabled = false;
+                    narrateButton.style.opacity = '1';
+                }
+            }
+
+            /**
+             * Displays the narration text in the box and schedules it to fade out.
+             */
+            function displayNarration(text) {
+                // Clear any existing timer
+                if (narrationTimer) {
+                    clearTimeout(narrationTimer);
+                }
+
+                narrationBox.textContent = text;
+                narrationBox.classList.add('visible');
+
+                // Hide the box after 8 seconds
+                narrationTimer = setTimeout(() => {
+                    narrationBox.classList.remove('visible');
+                }, 8000);
+            }
+
+            /**
+             * Handles the click event for the narrate button.
+             */
+            async function handleNarrateClick() {
+                showLoading(true);
+                displayNarration("✨ Generating narration..."); // Show loading message
+
+                try {
+                    // --- Step 1: Get narration text from Gemini ---
+                    const textSystemPrompt = "You are a poetic fireworks show narrator. Write a short, single-paragraph (2-3 sentences) narration for a beautiful fireworks display. Be evocative, family-friendly, and poetic.";
+                    const textUserQuery = "Describe the fireworks show.";
+                    
+                    const textPayload = {
+                        contents: [{ parts: [{ text: textUserQuery }] }],
+                        systemInstruction: { parts: [{ text: textSystemPrompt }] },
+                    };
+
+                    const textResponse = await fetchWithBackoff(TEXT_API_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(textPayload)
+                    });
+
+                    const textResult = await textResponse.json();
+                    const narrationText = textResult.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                    if (!narrationText) {
+                        throw new Error("Could not generate narration text.");
+                    }
+
+                    // --- Step 2: Get TTS audio from Gemini ---
+                    displayNarration("✨ Generating audio..."); // Update status
+                    
+                    // Add guidance for the voice
+                    const ttsPrompt = `Say with a gentle, awestruck voice: ${narrationText}`;
+                    
+                    const ttsPayload = {
+                        contents: [{ parts: [{ text: ttsPrompt }] }],
+                        generationConfig: {
+                            responseModalities: ["AUDIO"],
+                            speechConfig: {
+                                speechConfig: {
+                                    voiceConfig: {
+                                        prebuiltVoiceConfig: { voiceName: "Callirrhoe" } // A nice, easy-going voice
+                                    }
+                                }
+                            }
+                        },
+                        model: "gemini-2.5-flash-preview-tts"
+                    };
+
+                    const ttsResponse = await fetchWithBackoff(TTS_API_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(ttsPayload)
+                    });
+
+                    const ttsResult = await ttsResponse.json();
+                    const part = ttsResult?.candidates?.[0]?.content?.parts?.[0];
+                    const audioData = part?.inlineData?.data;
+                    const mimeType = part?.inlineData?.mimeType;
+
+                    if (!audioData || !mimeType || !mimeType.startsWith("audio/")) {
+                        throw new Error("Could not generate audio data.");
+                    }
+
+                    // --- Step 3: Play audio and display text ---
+                    displayNarration(narrationText); // Show final text
+                    await playAudio(audioData);
+
+                } catch (error) {
+                    console.error("Error during narration:", error);
+                    displayNarration(`Error: ${error.message}. Please try again.`);
+                } finally {
+                    showLoading(false);
+                }
+            }
+
+            /**
+             * Wrapper for fetch that includes exponential backoff.
+             */
+            async function fetchWithBackoff(url, options, retries = 3, delay = 1000) {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) {
+                        // Don't retry on client errors (4xx), but do on server errors (5xx)
+                        if (response.status >= 500 && retries > 0) {
+                            throw new Error(`Server error: ${response.status}`);
+                        }
+                        // For 4xx errors or other issues, just throw
+                        const errorBody = await response.json();
+                        throw new Error(errorBody.error?.message || `HTTP error ${response.status}`);
+                    }
+                    return response;
+                } catch (error) {
+                    if (retries > 0) {
+                        // Don't log to console, just wait and retry
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        return fetchWithBackoff(url, options, retries - 1, delay * 2);
+                    } else {
+                        // After all retries, throw the last error
+                        throw error;
+                    }
+                }
+            }
+
+            // --- Audio Helper Functions ---
+
+            /**
+             * Decodes Base64 string to ArrayBuffer.
+             */
+            function base64ToArrayBuffer(base64) {
+                const binaryString = window.atob(base64);
+                const len = binaryString.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                return bytes.buffer;
+            }
+
+            /**
+             * Converts raw PCM16 data into a playable WAV Blob.
+             */
+            function pcmToWav(pcmData, sampleRate) {
+                const numSamples = pcmData.length;
+                const numChannels = 1;
+                const bytesPerSample = 2; // 16-bit
+                const blockAlign = numChannels * bytesPerSample;
+                const byteRate = sampleRate * blockAlign;
+
+                const buffer = new ArrayBuffer(44 + numSamples * bytesPerSample);
+                const view = new DataView(buffer);
+
+                // RIFF header
+                view.setUint32(0, 0x52494646, false); // "RIFF"
+                view.setUint32(4, 36 + numSamples * bytesPerSample, true);
+                view.setUint32(8, 0x57415645, false); // "WAVE"
+                
+                // fmt chunk
+                view.setUint32(12, 0x666d7420, false); // "fmt "
+                view.setUint32(16, 16, true); // Subchunk1Size (16 for PCM)
+                view.setUint16(20, 1, true); // AudioFormat (1 for PCM)
+                view.setUint16(22, numChannels, true);
+                view.setUint32(24, sampleRate, true);
+                view.setUint32(28, byteRate, true);
+                view.setUint16(32, blockAlign, true);
+                view.setUint16(34, 16, true); // BitsPerSample
+                
+                // data chunk
+                view.setUint32(36, 0x64617461, false); // "data"
+                view.setUint32(40, numSamples * bytesPerSample, true);
+
+                // Write PCM data
+                for (let i = 0; i < numSamples; i++) {
+                    view.setInt16(44 + i * 2, pcmData[i], true);
+                }
+
+                return new Blob([view], { type: 'audio/wav' });
+            }
+
+            /**
+             * Plays the Base64 encoded PCM audio data.
+             */
+            async function playAudio(base64Data) {
+                if (!audioContext) return;
+                
+                // Resume context if it was suspended (e.g., by browser policy)
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                }
+
+                try {
+                    // 1. Decode Base64 to ArrayBuffer
+                    const pcmBuffer = base64ToArrayBuffer(base64Data);
+                    // 2. Convert ArrayBuffer to Int16Array (PCM16)
+                    const pcm16 = new Int16Array(pcmBuffer);
+                    // 3. Convert PCM16 to a WAV Blob
+                    const wavBlob = pcmToWav(pcm16, AUDIO_SAMPLE_RATE);
+                    // 4. Create an Object URL from the Blob
+                    const audioUrl = URL.createObjectURL(wavBlob);
+                    
+                    // 5. Play the audio using an <audio> element for simplicity
+                    const audio = new Audio(audioUrl);
+                    await audio.play();
+
+                    // 6. Revoke the URL after it's done playing (or after a delay)
+                    audio.onended = () => {
+                        URL.revokeObjectURL(audioUrl);
+                    };
+
+                } catch (e) {
+                    console.error("Error playing audio:", e);
+                    displayNarration("Error: Could not play audio.");
+                }
+            }
+
+
+            // --- Event Listeners ---
+            window.addEventListener('resize', setupCanvas);
+
+            // Click to launch
+            canvas.addEventListener('click', (e) => {
+                // Resume AudioContext on first user interaction
+                if (audioContext && audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+                launchRocket(e.clientX, e.clientY);
+                hideInstructions();
+            });
+
+            // Touch to launch
+            canvas.addEventListener('touchstart', (e) => {
+                // Resume AudioContext on first user interaction
+                if (audioContext && audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+                e.preventDefault(); 
+                if (e.touches.length > 0) {
+                    launchRocket(e.touches[0].clientX, e.touches[0].clientY);
+                    hideInstructions();
+                }
+            });
+
+            // Gemini button listener
+            narrateButton.addEventListener('click', handleNarrateClick);
+            
+            // --- Auto-launcher ---
+            function autoLaunch() {
+                // Launch a rocket from a random bottom position
+                launchRocket(random(canvas.width * 0.2, canvas.width * 0.8), canvas.height);
+                
+                // Set a random timeout for the next launch
+                setTimeout(autoLaunch, random(500, 2000));
+            }
+
+            // --- Start ---
+            setupCanvas();
+            animate();
+            
+            // Start the auto-launcher after a short delay
+            setTimeout(autoLaunch, 1000);
+        });
+    </script>
+</body>
+</html>

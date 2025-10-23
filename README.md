@@ -2,7 +2,7 @@
 
 A stunning, interactive fireworks display that runs entirely in your browser. This project combines the HTML Canvas for physics-based animation with the Google Gemini API to provide ✨ **AI-powered poetic narration and text-to-speech (TTS)** ✨ for the show.
 
-![Demo GIF of the fireworks generator with narration text appearing.](https://i.imgur.com/839I4H2.gif)
+# LIVE: https://riponalmamun.github.io/Fireworks-Generator/
 
 ## Features
 
